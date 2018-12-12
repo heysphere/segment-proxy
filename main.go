@@ -18,11 +18,8 @@ import (
 const segmentCDNHost string = "http://cdn.segment.com"
 const segmentTrackingAPIHost string = "http://api.segment.io"
 
-// Replace with real mirror host URLs
-var mirrorHosts = []string{
-	"http://localhost:8081",
-	"http://localhost:8082",
-}
+// Replace with the real mirror host URL
+const mirrorHost = "http://localhost:8081"
 
 func parseURL(hostName string) *url.URL {
 	targetURL, err := url.Parse(hostName)
@@ -72,7 +69,7 @@ func copyRequestTo(client *http.Client, url *url.URL, req *http.Request) error {
 		return err
 	}
 
-	defer resp.Body.Close()
+	resp.Body.Close()
 	return nil
 }
 
@@ -84,7 +81,7 @@ func NewSegmentReverseProxy(
 	client *http.Client,
 	cdn *url.URL,
 	trackingAPI *url.URL,
-	mirrorHostURLs []*url.URL,
+	mirrorHostURL *url.URL,
 ) http.Handler {
 	director := func(req *http.Request) {
 		// Figure out which server to redirect to based on the incoming request.
@@ -108,27 +105,16 @@ func NewSegmentReverseProxy(
 		// Set the host of the request to the host of of the destination URL.
 		// See http://blog.semanticart.com/blog/2013/11/11/a-proper-api-proxy-written-in-go/.
 		req.Host = req.URL.Host
-		for _, mirrorURL := range mirrorHostURLs {
-			err := copyRequestTo(client, mirrorURL, req)
-			if err != nil {
-				log.Printf(
-					"WARNING: Failed to mirror request to %s: %v\n",
-					mirrorURL.String(), err,
-				)
-			}
+		err := copyRequestTo(client, mirrorHostURL, req)
+		if err != nil {
+			log.Printf(
+				"WARNING: Failed to mirror request to %s: %v\n",
+				mirrorHostURL.String(), err,
+			)
 		}
 	}
 
 	return &httputil.ReverseProxy{Director: director}
-}
-
-func createMirrorHostsList() []*url.URL {
-	mirrorHostURLs := make([]*url.URL, len(mirrorHosts))
-	for i, hostName := range mirrorHosts {
-		mirrorHostURLs[i] = parseURL(hostName)
-	}
-
-	return mirrorHostURLs
 }
 
 var port = flag.String("port", "8080", "bind address")
@@ -141,7 +127,7 @@ func main() {
 		&http.Client{},
 		parseURL(segmentCDNHost),
 		parseURL(segmentTrackingAPIHost),
-		createMirrorHostsList(),
+		parseURL(mirrorHost),
 	)
 	if *debug {
 		proxy = handlers.LoggingHandler(os.Stdout, proxy)

@@ -1,14 +1,17 @@
-FROM golang:alpine
+FROM golang:latest
 
 COPY . $GOPATH/src/github.com/heysphere/segment-proxy
 WORKDIR $GOPATH/src/github.com/heysphere/segment-proxy
-
-RUN apk add --update make
-RUN apk add --update git
 RUN go get github.com/tools/godep
-
 RUN godep restore
-RUN make build
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o bin/segment-proxy
+
+##################
+
+FROM golang:alpine
+
+WORKDIR /root
+COPY --from=0 $GOPATH/src/github.com/heysphere/segment-proxy/bin/segment-proxy .
 
 EXPOSE 8080
-CMD bin/segment-proxy
+CMD ["./segment-proxy"]
