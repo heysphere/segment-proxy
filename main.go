@@ -118,7 +118,7 @@ func NewSegmentReverseProxy(
 		err := copyRequestTo(client, mirrorHostURL, req)
 		if err != nil {
 			log.Printf(
-				"WARNING: Failed to mirror request to %s: %v\n",
+				"ERROR: Failed to mirror request to %s: %v\n",
 				mirrorHostURL.String(), err,
 			)
 		}
