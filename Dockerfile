@@ -10,6 +10,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o bin/segment-proxy
 
 FROM golang:alpine
 
+# add certificates for remote TLS calls
+RUN apk add ca-certificates
 WORKDIR /root
 COPY --from=0 $GOPATH/src/github.com/heysphere/segment-proxy/bin/segment-proxy .
 
