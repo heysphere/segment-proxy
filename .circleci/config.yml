@@ -1,0 +1,187 @@
+# CircleCI 2.0 config for track-handler
+# The following variables are defined in org-global context :
+# GCLOUD_PROJECT
+# GCLOUD_RAW_SERVICE_KEY
+# CLOUDSDK_COMPUTE_ZONE
+# The following variables are defined in project settings :
+# IMAGE_NAME
+# 
+version: 2.0
+defaults: &defaults
+  working_directory: ~/sphere
+aliases:
+  # Variables.
+  # For YAML support of anchors and references, @see http://blog.daemonl.com/2016/02/yaml.html
+  - &build_container_config
+    image: docker
+  - &step_restore_gcloud_cache
+    restore_cache:
+      key: gcloud-config-cache-v3
+  - &step_git_update_tags
+    run:
+      name: Update git tags
+      command: |
+        git tag -f -a ${SPHERE_ENV} -m "CircleCI build : ${CIRCLE_BUILD_URL}"
+        git push origin refs/tags/${SPHERE_ENV} --force
+  - &step_kubernetes_deploy
+    run:
+      name: Update Kubernetes deployments with new image
+      command: |
+        gcloud config set container/cluster $CLUSTER_NAME
+        gcloud container clusters get-credentials $CLUSTER_NAME
+        for deploy in ${DEPLOYMENTS};
+        do
+          kubectl set image deployment/${deploy} \
+            ${deploy}=gcr.io/${GCLOUD_PROJECT}/${IMAGE_NAME}:${CIRCLE_SHA1} \
+            --namespace=${NAMESPACE} --record
+        done
+jobs:
+  pack_and_build:
+    <<: *defaults
+    docker:
+      - *build_container_config
+    steps:
+      - attach_workspace:
+          at: .
+      - setup_remote_docker
+      - run: |
+          DOCKER_TAG=$(echo ${CIRCLE_BRANCH:-$CIRCLE_TAG} | sed -e 's/[:/-]/_/g' )
+          docker build \
+            -t gcr.io/${GCLOUD_PROJECT}/${IMAGE_NAME}:${CIRCLE_SHA1} \
+            -t gcr.io/${GCLOUD_PROJECT}/${IMAGE_NAME}:build_${CIRCLE_BUILD_NUM} \
+            -t gcr.io/${GCLOUD_PROJECT}/${IMAGE_NAME}:${DOCKER_TAG} \
+            .
+          docker login -u _json_key -p "${GCLOUD_RAW_SERVICE_KEY}" https://gcr.io
+          docker push gcr.io/${GCLOUD_PROJECT}/${IMAGE_NAME}
+ gcloud_init:
+    docker:
+      # We only need basic gcloud functionality here, use a small image for speed
+      - image: google/cloud-sdk:alpine
+    steps:
+      - *step_restore_gcloud_cache
+      - run: |
+          if [ ! -e ~/.config/gcloud/credentials.db ]; then
+            gcloud auth activate-service-account --key-file <(echo $GCLOUD_RAW_SERVICE_KEY)
+            gcloud config set project $GCLOUD_PROJECT
+            gcloud config set compute/zone $CLOUDSDK_COMPUTE_ZONE
+          fi
+      - save_cache:
+          key: gcloud-config-cache-v3
+          paths:
+            - ~/.config/gcloud
+            - ~/.kube
+  deploy_staging:
+    docker:
+      - *build_container_config
+    environment:
+      - CLUSTER_NAME: sphere-staging
+      - NAMESPACE: staging
+      - SPHERE_ENV: staging
+      - DEPLOYMENTS: "segment-proxy"
+    steps:
+      - *step_restore_gcloud_cache
+      - *step_kubernetes_deploy
+      # Tag back git repo + docker image
+      # First, git :
+      - checkout
+      - add_ssh_keys
+      - *step_git_update_tags
+      # Then, docker :
+      - run : |
+          gcloud container images add-tag \
+            gcr.io/${GCLOUD_PROJECT}/${IMAGE_NAME}:${CIRCLE_SHA1} \
+            gcr.io/${GCLOUD_PROJECT}/${IMAGE_NAME}:${SPHERE_ENV}
+  deploy_production:
+    docker:
+      - *build_container_config
+    environment:
+      - CLUSTER_NAME: sphere-production
+      - NAMESPACE: production
+      - SPHERE_ENV: production
+      - DEPLOYMENTS: "segment-proxy"
+    steps:
+      - *step_restore_gcloud_cache
+      - *step_kubernetes_deploy
+      # Tag back git repo + docker image
+      # First, git :
+      - checkout
+      - add_ssh_keys
+      - *step_git_update_tags
+      # Then, docker (latest tag added at production stage only)
+      - run : |
+          gcloud container images add-tag \
+            gcr.io/${GCLOUD_PROJECT}/${IMAGE_NAME}:${CIRCLE_SHA1} \
+            gcr.io/${GCLOUD_PROJECT}/${IMAGE_NAME}:${SPHERE_ENV}
+          gcloud container images add-tag \
+            gcr.io/${GCLOUD_PROJECT}/${IMAGE_NAME}:${CIRCLE_SHA1} \
+            gcr.io/${GCLOUD_PROJECT}/${IMAGE_NAME}:latest
+  # This deploys anything git-tagged with "testing" (typically feature branch)
+  # to the testing cluster
+  deploy_testing:
+    docker:
+      - *build_container_config
+    environment:
+      - CLUSTER_NAME: sphere-test
+      - NAMESPACE: test
+      - SPHERE_ENV: testing
+      - DEPLOYMENTS: "segment-proxy"
+    steps:
+      - *step_restore_gcloud_cache
+      - *step_kubernetes_deploy
+      # We deploy non-master to testing only if already tagged "testing" by the user
+      # No need to tag again from Circle here.
+
+workflows:
+  version: 2
+  build-and-deploy:
+  # MUST READ AND UNDERSTAND before changing anything here :
+  # https://circleci.com/docs/2.0/workflows/#git-tag-job-execution
+    jobs:
+      - pack_and_build:
+          context: org-global
+          filters:
+            branches:
+              only: master
+            tags:
+              only: testing
+      - gcloud_init:
+          context: org-global
+          filters:
+            branches:
+              only: master
+            tags:
+              only: testing
+      - deploy_testing:
+          context: org-global
+          requires:
+            - gcloud_init
+            - pack_and_build
+          filters:
+            tags:
+              only: testing
+            branches:
+              ignore: /.*/
+      - deploy_staging:
+          context: org-global
+          requires:
+            - gcloud_init
+            - pack_and_build
+          filters:
+            branches:
+              only: master
+      - confirm_deploy_production:
+          context: org-global
+          type: approval
+          filters:
+            branches:
+              only: master
+      - deploy_production:
+          context: org-global
+          requires:
+            - confirm_deploy_production
+            - deploy_staging
+            - gcloud_init
+            - pack_and_build
+          filters:
+            branches:
+              only: master

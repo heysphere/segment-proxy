@@ -144,5 +144,6 @@ func main() {
 		log.Printf("serving proxy at port %v\n", *port)
 	}
 
+	// TODO: https?
 	log.Fatal(http.ListenAndServe(":"+*port, proxy))
 }
