@@ -43,10 +43,14 @@ func singleJoiningSlash(a, b string) string {
 	return a + b
 }
 
-func isCDNUrl(url *url.URL) bool {
+func isCDNURL(url *url.URL) bool {
 	urlStr := url.String()
 	return strings.HasPrefix(urlStr, "/v1/projects") ||
 		strings.HasPrefix(urlStr, "/analytics.js/v1")
+}
+
+func isAttributionURL(url *url.URL) bool {
+	return strings.HasPrefix(url.String(), "/v1/attribution")
 }
 
 func copyRequestTo(client *http.Client, url *url.URL, req *http.Request) error {
@@ -86,10 +90,16 @@ func NewSegmentReverseProxy(
 	director := func(req *http.Request) {
 		// Figure out which server to redirect to based on the incoming request.
 		var target *url.URL
-		if isCDNUrl(req.URL) {
+		if isCDNURL(req.URL) {
 			target = cdn
 		} else {
 			target = trackingAPI
+			if isAttributionURL(req.URL) {
+				log.Printf(
+					"[INFO]: Got an attribution request: [%s]\n",
+					req.URL.String(),
+				)
+			}
 		}
 
 		targetQuery := target.RawQuery
