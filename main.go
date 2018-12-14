@@ -15,11 +15,9 @@ import (
 	"github.com/gorilla/handlers"
 )
 
+const mirrorHostEnv string = "SEGMENT_MIRROR_HOST_ENV"
 const segmentCDNHost string = "http://cdn.segment.com"
 const segmentTrackingAPIHost string = "http://api.segment.io"
-
-// Replace with the real mirror host URL
-const mirrorHost = "http://localhost:8081"
 
 func parseURL(hostName string) *url.URL {
 	targetURL, err := url.Parse(hostName)
@@ -115,12 +113,14 @@ func NewSegmentReverseProxy(
 		// Set the host of the request to the host of of the destination URL.
 		// See http://blog.semanticart.com/blog/2013/11/11/a-proper-api-proxy-written-in-go/.
 		req.Host = req.URL.Host
-		err := copyRequestTo(client, mirrorHostURL, req)
-		if err != nil {
-			log.Printf(
-				"ERROR: Failed to mirror request to %s: %v\n",
-				mirrorHostURL.String(), err,
-			)
+		if mirrorHostURL != nil {
+			err := copyRequestTo(client, mirrorHostURL, req)
+			if err != nil {
+				log.Printf(
+					"ERROR: Failed to mirror request to %s: %v\n",
+					mirrorHostURL.String(), err,
+				)
+			}
 		}
 	}
 
@@ -133,11 +133,20 @@ var debug = flag.Bool("debug", false, "debug mode")
 func main() {
 	flag.Parse()
 
+	mirrorHost := os.Getenv(mirrorHostEnv)
+	var mirrorHostURL *url.URL
+	if mirrorHost == "" {
+		log.Printf("[WARNING]: %s ENV is not set!\n", mirrorHostEnv)
+		mirrorHostURL = nil
+	} else {
+		mirrorHostURL = parseURL(mirrorHost)
+	}
+
 	proxy := NewSegmentReverseProxy(
 		&http.Client{},
 		parseURL(segmentCDNHost),
 		parseURL(segmentTrackingAPIHost),
-		parseURL(mirrorHost),
+		mirrorHostURL,
 	)
 	if *debug {
 		proxy = handlers.LoggingHandler(os.Stdout, proxy)
